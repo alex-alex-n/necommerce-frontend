@@ -9,8 +9,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME_BACKEND: ${{ github.repository }}/necommerce-backend
-  IMAGE_NAME_FRONTEND: ${{ github.repository }}/necommerce-frontend
+  IMAGE_NAME_BACKEND: alex-alex-n/necommerce-backend
+  IMAGE_NAME_FRONTEND: alex-alex-n/necommerce-frontend
 
 jobs:
   # Для backend репозитория
