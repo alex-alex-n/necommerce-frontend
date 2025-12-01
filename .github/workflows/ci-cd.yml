@@ -32,17 +32,27 @@ jobs:
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: 'lts'
+        node-version: '20'  # Используйте конкретную версию вместо 'lts'
         cache: 'npm'
     
     - name: Install dependencies
       run: npm ci
     
-    - name: Run linting
-      run: npm run lint || echo "Linting failed but continuing..."
+    - name: Run linting (if configured)
+      run: |
+        if [ -f "package.json" ] && grep -q '"lint"' package.json; then
+          npm run lint
+        else
+          echo "Lint script not found, skipping..."
+        fi
     
-    - name: Run tests
-      run: npm test -- --passWithNoTests
+    - name: Run tests (if configured)
+      run: |
+        if [ -f "package.json" ] && grep -q '"test"' package.json; then
+          npm test -- --passWithNoTests
+        else
+          echo "Test script not found, skipping..."
+        fi
     
     - name: Build application
       run: npm run build
@@ -87,7 +97,7 @@ jobs:
           type=ref,event=pr
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}
-          type=sha,prefix={{branch}}-
+          type=sha,prefix=sha-
     
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
@@ -99,22 +109,24 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
     
+    - name: Scan image with Trivy
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ghcr.io/${{ github.repository }}:latest
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+    
+    - name: Upload Trivy results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+    
     - name: Generate deployment report
       run: |
         echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
         echo "- **Image**: ghcr.io/${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Tags**: ${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY
-    
-    - name: Update README badge
-      uses: schneegans/dynamic-badges-action@v1.7.0
-      if: success()
-      with:
-        auth: ${{ secrets.GITHUB_TOKEN }}
-        gistID: YOUR_GIST_ID
-        filename: frontend-ci-status.json
-        label: Frontend CI
-        message: ${{ job.status }}
-        color: ${{ job.status == 'success' && 'green' || 'red' }}
-        namedLogo: githubactions
+        echo "- **Build Time**: $(date -u)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Node Version**: 20" >> $GITHUB_STEP_SUMMARY
