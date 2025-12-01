@@ -8,15 +8,13 @@ on:
 jobs:
   build-test:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'   # выберите нужную LTS-версию
+          node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
