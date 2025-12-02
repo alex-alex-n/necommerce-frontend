@@ -1,0 +1,43 @@
+name: SAST - Semgrep
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+  schedule:
+    - cron: '0 4 * * 1' # еженедельно по понедельникам в 04:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: Semgrep SAST Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Вариант 1: локный (без отправки результатов в Semgrep App)
+      - name: Run Semgrep (local, OWASP Top 10 + recommended)
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >
+            p/owasp-top-ten
+            p/javascript
+            p/security-audit
+          generateSarif: true
+          sarifFile: semgrep.sarif
+        env:
+          SEMGREP_APP_TOKEN: ""  # не нужен для локного режима
+
+      # Загрузить отчёт в GitHub Code Scanning (Security → Code scanning alerts)
+      - name: Upload Semgrep SARIF to GitHub
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+
+      # Если хочешь, чтобы пайплайн не падал из‑за найденных проблем, добавь:
+      # continue-on-error: true
