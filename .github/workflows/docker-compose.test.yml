@@ -14,38 +14,32 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
     
-    - name: Setup Docker Compose
-      run: |
-        # Убедитесь, что docker-compose.yml есть в корне
-        if [ ! -f "docker-compose.yml" ]; then
-          echo "Creating docker-compose.yml..."
-          echo 'version: "3.7"
-services:
-  backend:
-    image: ghcr.io/netology-code/necommerce-backend
-    ports:
-      - "9999:9999"
-  frontend:
-    image: ghcr.io/netology-code/necommerce-frontend
-    environment:
-      - API=http://backend:9999
-      - MEDIA=http://backend:9999
-    ports:
-      - "8888:80"
-    depends_on:
-      - backend' > docker-compose.yml
-        fi
-    
     - name: Start app
       run: |
         docker-compose up -d
-        sleep 15
-        curl -f http://localhost:8888 || echo "Frontend started"
-        curl -f http://localhost:9999 || echo "Backend started"
+        # Ожидание запуска frontend
+        for i in {1..30}; do
+          if curl -s -o /dev/null -w "%{http_code}" http://localhost:8888 | grep -q "200"; then
+            echo "Frontend is up."
+            break
+          fi
+          sleep 5
+          echo "Waiting for frontend... $i"
+        done
+        # Ожидание запуска backend
+        for i in {1..30}; do
+          if curl -s -o /dev/null -w "%{http_code}" http://localhost:9999 | grep -q "200"; then
+            echo "Backend is up."
+            break
+          fi
+          sleep 5
+          echo "Waiting for backend... $i"
+        done
     
     - name: Quick ZAP scan
       run: |
-        docker run -i owasp/zap2docker-stable zap-baseline.py \
+        docker run --add-host=host.docker.internal:host-gateway \
+          -i owasp/zap2docker-stable zap-baseline.py \
           -t http://host.docker.internal:8888 \
           -r report.html \
           -I
