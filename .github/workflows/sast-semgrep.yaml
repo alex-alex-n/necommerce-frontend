@@ -21,38 +21,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run Semgrep (local, OWASP Top 10 + JS security)
-        id: semgrep
-        uses: returntocorp/semgrep-action@v1
-        with:
-          config: >
-            p/owasp-top-ten
-            p/javascript
-            p/security-audit
-          generateSarif: true
-          sarifFile: ./semgrep/semgrep.sarif
-          # debug: true   # можно включить для большего лога
-        env:
-          SEMGREP_APP_TOKEN: ""  # локальный режим, токен не нужен
-
-      - name: List files (debug)
+      - name: Install Semgrep
         run: |
-          echo "Workspace content:"
+          python3 -m pip install --upgrade pip
+          python3 -m pip install semgrep
+
+      - name: Run Semgrep and generate SARIF
+        run: |
+          mkdir -p semgrep
+          semgrep \
+            --config "p/owasp-top-ten p/javascript p/security-audit" \
+            --sarif \
+            --output semgrep/semgrep.sarif \
+            --error || true
           ls -R
-          echo "Semgrep dir content:"
-          ls -R semgrep || echo "no semgrep dir"
-
-      - name: Check SARIF exists
-        id: check_sarif
-        run: |
-          if [ -f "./semgrep/semgrep.sarif" ]; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "found=false" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Upload Semgrep SARIF to GitHub
-        if: steps.check_sarif.outputs.found == 'true'
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: ./semgrep/semgrep.sarif
+          sarif_file: semgrep/semgrep.sarif
