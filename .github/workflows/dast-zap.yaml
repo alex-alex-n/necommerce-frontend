@@ -1,0 +1,68 @@
+name: DAST - OWASP ZAP Scan
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+  schedule:
+    - cron: '0 5 * * 1' # еженедельно по понедельникам в 05:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  zap-dast:
+    name: OWASP ZAP DAST Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image for app
+        run: |
+          docker build -t dast-app:latest .
+
+      - name: Run app container
+        run: |
+          docker run -d --name dast-app -p 8080:80 dast-app:latest
+          # Ждём, пока приложение поднимется
+          for i in {1..30}; do
+            if curl -sSf http://localhost:8080 > /dev/null; then
+              echo "App is up"
+              break
+            fi
+            echo "Waiting for app..."
+            sleep 5
+          done
+
+      - name: Run OWASP ZAP baseline scan
+        run: |
+          mkdir -p zap-report
+          docker run --rm \
+            --network host \
+            -v $PWD/zap-report:/zap/wrk \
+            owasp/zap2docker-stable \
+            zap-baseline.py \
+              -t http://localhost:8080 \
+              -r zap-report.html \
+              -x zap-report.xml \
+              -a
+        # Если не хочешь, чтобы пайплайн падал из-за найденных уязвимостей, добавь:
+        # continue-on-error: true
+
+      - name: Stop app container
+        if: always()
+        run: |
+          docker logs dast-app || true
+          docker stop dast-app || true
+          docker rm dast-app || true
+
+      - name: Upload ZAP HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-dast-report
+          path: zap-report/zap-report.html
+          if-no-files-found: warn
