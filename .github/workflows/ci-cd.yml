@@ -13,7 +13,7 @@ env:
   NODE_VERSION: '20'
 
 jobs:
-  test-and-lint:
+test-and-lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,9 +21,20 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '20'
           cache: 'npm'
-          cache-dependency-path: package-lock.json
+      
+      - name: Check package.json and package-lock.json sync
+        run: |
+          if npm ci --dry-run; then
+            echo "package.json and package-lock.json are in sync"
+          else
+            echo "::warning::package.json and package-lock.json are out of sync. Using npm install instead of npm ci."
+            rm -f package-lock.json
+          fi
+      
+      - name: Install dependencies
+        run: npm install
       
       - name: Clean install dependencies
         run: |
