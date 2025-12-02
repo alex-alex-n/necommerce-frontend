@@ -1,16 +1,45 @@
-# docker-compose.test.yml
-version: '3.7'
-services:
-  backend:
-    image: ghcr.io/netology-code/necommerce-backend
-    ports:
-      - "9999:9999"
-  frontend:
-    image: ghcr.io/netology-code/necommerce-frontend
-    environment:
-      - API=http://backend:9999
-      - MEDIA=http://backend:9999
-    ports:
-      - "8888:80"
-    depends_on:
-      - backend
+# .github/workflows/dast-scan.yml
+name: DAST Security Scan
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  dast-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    # Шаг 1: Checkout кода
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    # Шаг 2: Запуск приложения ИЗ КОРНЯ ПРОЕКТА
+    - name: Start application
+      run: |
+        # Убедитесь, что docker-compose.yml в корне проекта
+        ls -la docker-compose.yml
+        docker-compose up -d
+        sleep 30
+    
+    # Шаг 3: Проверка приложения
+    - name: Check application health
+      run: |
+        # Проверка frontend
+        curl -s -o /dev/null -w "%{http_code}" http://localhost:8888
+        # Проверка backend
+        curl -s -o /dev/null -w "%{http_code}" http://localhost:9999
+    
+    # Шаг 4: Запуск ZAP
+    - name: Run ZAP scan
+      uses: zaproxy/action-baseline@v0.11.0
+      with:
+        target: 'http://localhost:8888'
+    
+    # Шаг 5: Остановка приложения
+    - name: Cleanup
+      if: always()
+      run: docker-compose down
