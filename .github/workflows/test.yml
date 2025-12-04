@@ -8,21 +8,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  # 1. Подготовка окружения и запуск docker-compose
+  # 1. Подготовка окружения и запуск docker compose
   setup-and-compose:
     runs-on: ubuntu-latest
-    services:
-      docker:
-        image: docker:24.0.2-dind
-        privileged: true
-        options: >-
-          --dns 8.8.8.8
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -31,23 +22,34 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Start services via docker-compose
+      - name: Start services via docker compose
         run: |
-          docker-compose up -d
+          docker compose up -d
           docker ps
 
       - name: Wait for services to be ready
         run: |
+          # Ожидание frontend
           for i in {1..30}; do
             if curl -sSf http://localhost:8888 > /dev/null; then
               echo "Frontend is up"
               break
             fi
-            echo "Waiting for frontend..."
+            echo "Waiting for frontend... $i"
             sleep 5
           done
 
-  # 2. SAST-анализ (пример: SonarCloud или CodeQL)
+          # Ожидание backend
+          for i in {1..30}; do
+            if curl -sSf http://localhost:9999 > /dev/null; then
+              echo "Backend is up"
+              break
+            fi
+            echo "Waiting for backend... $i"
+            sleep 5
+          done
+
+  # 2. SAST-анализ
   sast:
     runs-on: ubuntu-latest
     needs: setup-and-compose
@@ -55,11 +57,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Вариант 1. CodeQL (если требуется именно GitHub-native решение)
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
-          languages: javascript # или другие: javascript, java, python, etc.
+          languages: javascript
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
@@ -69,14 +70,13 @@ jobs:
         with:
           category: "/language:javascript"
 
-      # Пример выгрузки логов/отчётов
       - name: Upload CodeQL SARIF
         uses: actions/upload-artifact@v4
         with:
           name: sast-codeql-results
-          path: ./results # путь скорректируйте под фактический
+          path: ./results # скорректируйте под фактический путь
 
-  # 3. OSA-анализ (анализ зависимостей)
+  # 3. OSA-анализ
   osa:
     runs-on: ubuntu-latest
     needs: setup-and-compose
@@ -84,7 +84,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Пример: OWASP Dependency-Check (универсальный инструмент для Java, JS и др.)
       - name: Install Dependency-Check
         run: |
           wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.2/dependency-check-10.0.2-release.zip
@@ -119,7 +118,6 @@ jobs:
         with:
           version: latest
 
-      # Анализ образов
       - name: Scan backend image
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -138,7 +136,6 @@ jobs:
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH,MEDIUM,LOW'
 
-      # Анализ конфигурации (docker-compose, Dockerfile, k8s yaml и др.)
       - name: Trivy config scan
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -164,7 +161,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Вариант 1: Gitleaks
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         with:
@@ -184,9 +180,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Start services via docker-compose
+      - name: Start services via docker compose
         run: |
-          docker-compose up -d
+          docker compose up -d
           docker ps
 
       - name: Wait for frontend
@@ -200,10 +196,9 @@ jobs:
             sleep 5
           done
 
-      # Запуск ZAP в режиме baseline/quick scan
       - name: Run OWASP ZAP Baseline Scan
         run: |
-          docker run --network host -v $PWD:/zap/wrk/:rw -t owasp/zap2docker-stable zap-baseline.py \
+          docker run --network host -v "$PWD:/zap/wrk/:rw" -t owasp/zap2docker-stable zap-baseline.py \
             -t http://localhost:8888 \
             -r zap-report.html \
             -x zap-report.xml \
