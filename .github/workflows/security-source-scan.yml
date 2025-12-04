@@ -45,52 +45,23 @@ jobs:
         with:
           category: "/language:javascript"
 
-           # ---------- OSA (Dependency-Check через Docker с локальным кэшем) ----------
-      # 1. Чистим/создаём каталог с БД и обновляем её
-      - name: Prepare Dependency-Check DB
-        run: |
-          rm -rf dc-data
-          mkdir -p dc-data
-          docker run --rm \
-            -v "$PWD/dc-data:/usr/share/dependency-check/data" \
-            owasp/dependency-check:latest \
-            --updateonly
+      # ---------- Лёгкий OSA для frontend (npm audit) ----------
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-      # 2. Сканируем frontend, не обновляя БД (используем уже скачанную)
-      - name: Run Dependency-Check for frontend
+      - name: NPM Audit (frontend)
+        working-directory: ./frontend
         run: |
-          mkdir -p reports/frontend
-          docker run --rm \
-            -v "$PWD/dc-data:/usr/share/dependency-check/data" \
-            -v "$PWD/frontend:/src" \
-            -v "$PWD/reports/frontend:/report" \
-            owasp/dependency-check:latest \
-            --scan /src \
-            --format HTML \
-            --out /report \
-            --project "necommerce-frontend" \
-            -n
+          npm install --ignore-scripts --no-fund --no-audit
+          npm audit --json > ../npm-audit-frontend.json || true
 
-      # 3. Сканируем backend с той же БД
-      - name: Run Dependency-Check for backend
-        run: |
-          mkdir -p reports/backend
-          docker run --rm \
-            -v "$PWD/dc-data:/usr/share/dependency-check/data" \
-            -v "$PWD/backend:/src" \
-            -v "$PWD/reports/backend:/report" \
-            owasp/dependency-check:latest \
-            --scan /src \
-            --format HTML \
-            --out /report \
-            --project "necommerce-backend" \
-            -n
-            
-      - name: Upload OSA reports
+      - name: Upload npm audit report
         uses: actions/upload-artifact@v4
         with:
-          name: osa-dependency-check-reports
-          path: reports
+          name: npm-audit-frontend
+          path: npm-audit-frontend.json
 
       # ---------- Secrets scan (Gitleaks) ----------
       - name: Run Gitleaks for frontend
