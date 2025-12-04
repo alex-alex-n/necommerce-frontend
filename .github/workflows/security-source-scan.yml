@@ -45,45 +45,30 @@ jobs:
         with:
           category: "/language:javascript"
 
-      # ---------- OSA (Dependency-Check через Docker) ----------
-      # 1. Один раз обновляем БД (без -n). База будет сохранена в ./dc-data
-      - name: Dependency-Check DB update
-        run: |
-          mkdir -p dc-data
-          docker run --rm \
-            -v "$PWD/dc-data:/usr/share/dependency-check/data" \
-            owasp/dependency-check:latest \
-            --updateonly
-
-      # 2. Анализ frontend с использованием уже скачанной БД и без повторного обновления (-n)
+      # ---------- OSA (Dependency-Check через Docker, без локального кэша) ----------
       - name: Run Dependency-Check for frontend
         run: |
           mkdir -p reports/frontend
           docker run --rm \
-            -v "$PWD/dc-data:/usr/share/dependency-check/data" \
             -v "$PWD/frontend:/src" \
             -v "$PWD/reports/frontend:/report" \
             owasp/dependency-check:latest \
             --scan /src \
             --format HTML \
             --out /report \
-            --project "necommerce-frontend" \
-            -n
+            --project "necommerce-frontend"
 
-      # 3. Анализ backend с той же БД
       - name: Run Dependency-Check for backend
         run: |
           mkdir -p reports/backend
           docker run --rm \
-            -v "$PWD/dc-data:/usr/share/dependency-check/data" \
             -v "$PWD/backend:/src" \
             -v "$PWD/reports/backend:/report" \
             owasp/dependency-check:latest \
             --scan /src \
             --format HTML \
             --out /report \
-            --project "necommerce-backend" \
-            -n
+            --project "necommerce-backend"
 
       - name: Upload OSA reports
         uses: actions/upload-artifact@v4
