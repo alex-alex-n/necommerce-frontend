@@ -24,7 +24,6 @@ jobs:
           git clone https://github.com/netology-code/necommerce-backend.git backend
 
       # ---------- SAST (CodeQL) ----------
-      # Для простоты: один CodeQL-анализ по объединённому JS-коду front+back
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
@@ -47,29 +46,36 @@ jobs:
           category: "/language:javascript"
 
       # ---------- OSA (Dependency-Check) ----------
-      - name: Install Dependency-Check
-        run: |
-          wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.2/dependency-check-10.0.2-release.zip
-          unzip dependency-check-10.0.2-release.zip -d dependency-check
-          chmod +x dependency-check/dependency-check/bin/dependency-check.sh
-
+      # Используем официальный Docker-образ и отключаем обновление NVD
       - name: Run Dependency-Check for frontend
         run: |
           mkdir -p reports/frontend
-          dependency-check/dependency-check/bin/dependency-check.sh \
-            --scan frontend \
-            --format "HTML" \
-            --out reports/frontend \
-            --project "necommerce-frontend"
+          docker run --rm \
+            -v "$PWD/frontend:/src" \
+            -v "$PWD/reports/frontend:/report" \
+            owasp/dependency-check:latest \
+            --scan /src \
+            --format HTML \
+            --out /report \
+            --project "necommerce-frontend" \
+            --nvdApiKey "" \
+            --nvdMaxRetryCount 0 \
+            --nvdApiDelay 0
 
       - name: Run Dependency-Check for backend
         run: |
           mkdir -p reports/backend
-          dependency-check/dependency-check/bin/dependency-check.sh \
-            --scan backend \
-            --format "HTML" \
-            --out reports/backend \
-            --project "necommerce-backend"
+          docker run --rm \
+            -v "$PWD/backend:/src" \
+            -v "$PWD/reports/backend:/report" \
+            owasp/dependency-check:latest \
+            --scan /src \
+            --format HTML \
+            --out /report \
+            --project "necommerce-backend" \
+            --nvdApiKey "" \
+            --nvdMaxRetryCount 0 \
+            --nvdApiDelay 0
 
       - name: Upload OSA reports
         uses: actions/upload-artifact@v4
