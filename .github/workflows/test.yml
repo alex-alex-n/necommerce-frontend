@@ -84,12 +84,13 @@ jobs:
         run: |
           wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.2/dependency-check-10.0.2-release.zip
           unzip dependency-check-10.0.2-release.zip -d dependency-check
-          chmod +x dependency-check/dependency-check.sh
+          # В архиве структура: dependency-check/dependency-check/...
+          chmod +x dependency-check/dependency-check/bin/dependency-check.sh
 
       - name: Run Dependency-Check
         run: |
           mkdir -p reports
-          dependency-check/dependency-check.sh \
+          dependency-check/dependency-check/bin/dependency-check.sh \
             --scan . \
             --format "HTML" \
             --out reports \
@@ -108,8 +109,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      # Отдельной "Install Trivy" не нужно — action сам тянет trivy
 
       - name: Scan backend image
         uses: aquasecurity/trivy-action@0.24.0
@@ -198,7 +197,9 @@ jobs:
 
       - name: Run OWASP ZAP Baseline Scan
         run: |
-          docker run --network host -v "$PWD:/zap/wrk/:rw" -t docker.io/owasp/zap2docker-stable \
+          docker run --rm --network host \
+            -v "$PWD:/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py \
             -t http://localhost:8888 \
             -r zap-report.html \
