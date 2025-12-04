@@ -23,27 +23,47 @@ jobs:
         run: |
           git clone https://github.com/netology-code/necommerce-backend.git backend
 
-      # ---------- SAST (CodeQL) ----------
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+      # ---------- SAST (Semgrep вместо CodeQL) ----------
+      - name: Setup Python (for Semgrep if needed)
+        uses: actions/setup-python@v5
         with:
-          languages: javascript
+          python-version: '3.x'
 
-      - name: Prepare combined workspace for CodeQL
+      - name: Install Semgrep
         run: |
-          mkdir -p workspace
-          cp -R frontend workspace/frontend
-          cp -R backend workspace/backend
+          python -m pip install --upgrade pip
+          pip install semgrep
 
-      - name: Autobuild (CodeQL)
-        uses: github/codeql-action/autobuild@v3
-        with:
-          working-directory: workspace
+      # Можно использовать готовые наборы правил Semgrep (recommended, security и т.п.)
+      # или свой .semgrep.yml в репозитории.
+      # Здесь пример с официальным набором правил OWASP Top 10 + generic security.
+      - name: Run Semgrep on frontend
+        working-directory: ./frontend
+        continue-on-error: true   # чтобы пайплайн не падал при найденных уязвимостях
+        run: |
+          semgrep \
+            --config "p/owasp-top-ten" \
+            --config "p/security-audit" \
+            --json \
+            --output ../semgrep-frontend.json
 
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+      - name: Run Semgrep on backend
+        working-directory: ./backend
+        continue-on-error: true
+        run: |
+          semgrep \
+            --config "p/owasp-top-ten" \
+            --config "p/security-audit" \
+            --json \
+            --output ../semgrep-backend.json
+
+      - name: Upload Semgrep reports
+        uses: actions/upload-artifact@v4
         with:
-          category: "/language:javascript"
+          name: semgrep-reports
+          path: |
+            semgrep-frontend.json
+            semgrep-backend.json
 
       # ---------- Лёгкий OSA (npm audit для frontend) ----------
       - name: Install Node.js
@@ -55,7 +75,6 @@ jobs:
         working-directory: ./frontend
         run: |
           npm install --ignore-scripts --no-fund --no-audit
-          # npm audit возвращает код 1 при найденных уязвимостях, поэтому глушим его
           npm audit --json > ../npm-audit-frontend.json || true
 
       - name: Upload npm audit report
@@ -96,8 +115,8 @@ jobs:
         run: |
           echo "Security Scan Summary" > summary.txt
           echo "" >> summary.txt
-          echo "1) CodeQL:" >> summary.txt
-          echo "   - Результаты смотри в GitHub Security -> Code scanning alerts." >> summary.txt
+          echo "1) Semgrep SAST:" >> summary.txt
+          echo "   - Артефакт: semgrep-reports (semgrep-frontend.json, semgrep-backend.json)." >> summary.txt
           echo "" >> summary.txt
           echo "2) npm audit (frontend):" >> summary.txt
           echo "   - Артефакт: npm-audit-frontend (файл npm-audit-frontend.json)." >> summary.txt
