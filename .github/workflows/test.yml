@@ -1,0 +1,282 @@
+name: Security Analysis Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Запускать каждую неделю в понедельник в 9:00 UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch: # Ручной запуск
+
+env:
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE_NAME: netology-code/necommerce-backend
+  FRONTEND_IMAGE_NAME: netology-code/necommerce-frontend
+
+jobs:
+  # Статический анализ исходного кода
+  sast:
+    runs-on: ubuntu-latest
+    name: SAST Analysis
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep SAST
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: p/security-audit
+          output: semgrep-results.sarif
+          publishToken: ${{ secrets.SEMGREP_APP_TOKEN }}
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: Upload SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep-results.sarif
+
+  # Анализ зависимостей
+  dependency-scanning:
+    runs-on: ubuntu-latest
+    name: Dependency Scanning
+    strategy:
+      matrix:
+        language: [python, javascript]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: matrix.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Set up Node.js
+        if: matrix.language == 'javascript'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          format: 'sarif'
+          output: 'trivy-results-${{ matrix.language }}.sarif'
+          scan-ref: '.'
+          scanners: 'vuln,secret'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results-${{ matrix.language }}.sarif
+
+  # Анализ Docker образов
+  container-scanning:
+    runs-on: ubuntu-latest
+    name: Container Scanning
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull and scan backend image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:latest
+          
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:latest'
+          format: 'sarif'
+          output: 'trivy-container-backend.sarif'
+          scanners: 'vuln'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+      - name: Pull and scan frontend image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:latest
+
+      - name: Run Trivy on frontend image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:latest'
+          format: 'sarif'
+          output: 'trivy-container-frontend.sarif'
+          scanners: 'vuln'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+      - name: Upload container scan results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-container-backend.sarif
+
+  # Поиск секретов
+  secret-scanning:
+    runs-on: ubuntu-latest
+    name: Secret Scanning
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Полная история для поиска в истории коммитов
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          config-path: .gitleaks.toml
+          redact: true
+
+      - name: Run TruffleHog
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: .
+          base: ${{ github.event.pull_request.base.sha || 'HEAD~1' }}
+          head: HEAD
+          extra_args: --only-verified
+
+  # Динамический анализ с OWASP ZAP
+  dast:
+    runs-on: ubuntu-latest
+    name: DAST with OWASP ZAP
+    needs: [dependency-scanning, container-scanning]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Compose
+        run: |
+          sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+
+      - name: Start application with Docker Compose
+        run: |
+          docker-compose up -d
+          echo "Waiting for services to start..."
+          sleep 30
+          docker-compose ps
+          curl -f http://localhost:8888 || echo "Frontend health check"
+          curl -f http://localhost:9999 || echo "Backend health check"
+
+      - name: Run OWASP ZAP baseline scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: 'http://localhost:8888'
+          rules_file_name: '.zap-rules.tsv'
+          cmd_options: '-a'
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run OWASP ZAP full scan
+        if: always()
+        run: |
+          docker run -v $(pwd):/zap/wrk/:rw -t \
+            owasp/zap2docker-stable zap-full-scan.py \
+            -t http://host.docker.internal:8888 \
+            -g gen.conf \
+            -r zap-report.html \
+            -w zap-report.md \
+            -x zap-report.xml \
+            --hook=/zap/wrk/.zap/hook.py \
+            -I
+
+      - name: Upload ZAP reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zap-reports
+          path: |
+            zap-report.html
+            zap-report.md
+            zap-report.xml
+          retention-days: 30
+
+      - name: Stop Docker Compose
+        if: always()
+        run: docker-compose down
+
+  # Генерация сводного отчета
+  security-report:
+    runs-on: ubuntu-latest
+    name: Generate Security Report
+    needs: [sast, dependency-scanning, container-scanning, secret-scanning, dast]
+    if: always()
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate summary report
+        run: |
+          echo "# Security Analysis Report" > SECURITY_REPORT.md
+          echo "Generated: $(date)" >> SECURITY_REPORT.md
+          echo "## Summary" >> SECURITY_REPORT.md
+          echo "| Job | Status | Findings |" >> SECURITY_REPORT.md
+          echo "|-----|--------|----------|" >> SECURITY_REPORT.md
+          
+          # Здесь можно добавить парсинг результатов из файлов
+          echo "| SAST | ${{ needs.sast.result }} | N/A |" >> SECURITY_REPORT.md
+          echo "| Dependency Scanning | ${{ needs.dependency-scanning.result }} | N/A |" >> SECURITY_REPORT.md
+          echo "| Container Scanning | ${{ needs.container-scanning.result }} | N/A |" >> SECURITY_REPORT.md
+          echo "| Secret Scanning | ${{ needs.secret-scanning.result }} | N/A |" >> SECURITY_REPORT.md
+          echo "| DAST | ${{ needs.dast.result }} | N/A |" >> SECURITY_REPORT.md
+
+      - name: Upload security report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: |
+            SECURITY_REPORT.md
+            artifacts/
+          retention-days: 90
+
+  # Проверка безопасности кода
+  codeql:
+    runs-on: ubuntu-latest
+    name: CodeQL Analysis
+    permissions:
+      security-events: write
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'python', 'javascript' ]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
