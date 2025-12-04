@@ -1,312 +1,218 @@
-name: Security Analysis Pipeline
+name: Security CI Pipeline
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ main ]
-  schedule:
-    - cron: '0 9 * * 1'
+    branches: [ main, master ]
   workflow_dispatch:
 
-env:
-  REGISTRY: ghcr.io
-  BACKEND_IMAGE_NAME: netology-code/necommerce-backend
-  FRONTEND_IMAGE_NAME: netology-code/necommerce-frontend
-
 jobs:
-  sast:
+  # 1. Подготовка окружения и запуск docker-compose
+  setup-and-compose:
     runs-on: ubuntu-latest
-    name: SAST Analysis
+    services:
+      docker:
+        image: docker:24.0.2-dind
+        privileged: true
+        options: >-
+          --dns 8.8.8.8
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run Semgrep
-        run: |
-          docker run --rm -v "$(pwd):/src" returntocorp/semgrep semgrep scan --config auto --json --output semgrep-report.json /src
-        continue-on-error: true
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Upload SAST report
-        uses: actions/upload-artifact@v4
-        if: always()
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          name: sast-report
-          path: semgrep-report.json
-          retention-days: 30
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-  dependency-scanning:
-    runs-on: ubuntu-latest
-    name: Dependency Scanning
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.9'
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Run Trivy for dependencies
+      - name: Start services via docker-compose
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "$(pwd):/src" aquasec/trivy:latest \
-            fs --format json --output /src/trivy-deps.json --scanners vuln /src
-        continue-on-error: true
-
-      - name: Upload dependency reports
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: dependency-reports
-          path: trivy-deps.json
-          retention-days: 30
-
-  container-scanning:
-    runs-on: ubuntu-latest
-    name: Container Scanning
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Run Trivy for containers
-        run: |
-          # Сканируем backend образ
-          docker run --rm aquasec/trivy:latest \
-            image --format json --output trivy-backend.json \
-            --scanners vuln,secret,config \
-            ghcr.io/netology-code/necommerce-backend:latest
-          
-          # Сканируем frontend образ
-          docker run --rm aquasec/trivy:latest \
-            image --format json --output trivy-frontend.json \
-            --scanners vuln,secret,config \
-            ghcr.io/netology-code/necommerce-frontend:latest
-        continue-on-error: true
-
-      - name: Upload container scan reports
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: container-reports
-          path: |
-            trivy-backend.json
-            trivy-frontend.json
-          retention-days: 30
-
-  secret-scanning:
-    runs-on: ubuntu-latest
-    name: Secret Scanning
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Run Gitleaks
-        run: |
-          docker run --rm -v "$(pwd):/src" zricethezav/gitleaks:latest \
-            detect --source /src --report-format json --report-path /src/gitleaks-report.json --verbose
-        continue-on-error: true
-
-      - name: Upload secret scan report
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: secret-report
-          path: gitleaks-report.json
-          retention-days: 30
-
-  deploy-and-dast:
-    runs-on: ubuntu-latest
-    name: Deploy and DAST Scan
-    needs: [dependency-scanning, container-scanning]
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Docker Compose
-        run: |
-          # Устанавливаем Docker Compose через pip (надежный способ)
-          python -m pip install --upgrade pip
-          pip install docker-compose
-
-      - name: Verify Docker Compose Installation
-        run: |
-          docker-compose --version
-          which docker-compose
-
-      - name: Start application
-        run: |
-          echo "Starting application with Docker Compose..."
           docker-compose up -d
-          
-          echo "Waiting for services to start (60 seconds)..."
-          sleep 60
-          
-          echo "Checking service status..."
-          docker-compose ps
-          
-          echo "Testing frontend connectivity..."
-          curl -f http://localhost:8888 -o /dev/null -w "Frontend HTTP Code: %{http_code}\n" -m 30 || echo "Frontend check failed"
-          
-          echo "Testing backend connectivity..."
-          curl -f http://localhost:9999 -o /dev/null -w "Backend HTTP Code: %{http_code}\n" -m 30 || echo "Backend check failed"
-          
-          echo "Listing running containers..."
           docker ps
 
-      - name: Run OWASP ZAP Scan
+      - name: Wait for services to be ready
         run: |
-          echo "Starting OWASP ZAP scan..."
-          
-          # Запускаем ZAP через Docker
-          docker run --name zap -d \
-            -u zap \
-            -p 8080:8080 \
-            -i \
-            owasp/zap2docker-stable zap.sh \
-            -daemon -host 0.0.0.0 -port 8080 \
-            -config api.disablekey=true \
-            -config api.addrs.addr.name=.* \
-            -config api.addrs.addr.regex=true
-          
-          echo "Waiting for ZAP to start..."
-          sleep 20
-          
-          # Проверяем, что ZAP запущен
-          curl -s http://localhost:8080 || echo "ZAP API check"
-          
-          echo "Running ZAP spider scan..."
-          docker exec zap zap-cli --api-key '' open-url http://host.docker.internal:8888
-          docker exec zap zap-cli --api-key '' spider http://host.docker.internal:8888
-          sleep 10
-          
-          echo "Running ZAP active scan..."
-          docker exec zap zap-cli --api-key '' active-scan http://host.docker.internal:8888
-          sleep 30
-          
-          echo "Generating ZAP reports..."
-          docker exec zap zap-cli --api-key '' report -o /zap/wrk/zap-report.html -f html
-          docker exec zap zap-cli --api-key '' report -o /zap/wrk/zap-report.json -f json
-          
-          # Копируем отчеты из контейнера
-          docker cp zap:/zap/wrk/zap-report.html .
-          docker cp zap:/zap/wrk/zap-report.json .
-          
-          # Останавливаем ZAP
-          docker stop zap
-          docker rm zap
-        continue-on-error: true
+          for i in {1..30}; do
+            if curl -sSf http://localhost:8888 > /dev/null; then
+              echo "Frontend is up"
+              break
+            fi
+            echo "Waiting for frontend..."
+            sleep 5
+          done
+
+  # 2. SAST-анализ (пример: SonarCloud или CodeQL)
+  sast:
+    runs-on: ubuntu-latest
+    needs: setup-and-compose
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Вариант 1. CodeQL (если требуется именно GitHub-native решение)
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript # или другие: javascript, java, python, etc.
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript"
+
+      # Пример выгрузки логов/отчётов
+      - name: Upload CodeQL SARIF
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-codeql-results
+          path: ./results # путь скорректируйте под фактический
+
+  # 3. OSA-анализ (анализ зависимостей)
+  osa:
+    runs-on: ubuntu-latest
+    needs: setup-and-compose
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Пример: OWASP Dependency-Check (универсальный инструмент для Java, JS и др.)
+      - name: Install Dependency-Check
+        run: |
+          wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.2/dependency-check-10.0.2-release.zip
+          unzip dependency-check-10.0.2-release.zip -d dependency-check
+          chmod +x dependency-check/bin/dependency-check.sh
+
+      - name: Run Dependency-Check
+        run: |
+          mkdir -p reports
+          dependency-check/bin/dependency-check.sh \
+            --scan . \
+            --format "HTML" \
+            --out reports \
+            --project "necommerce"
+
+      - name: Upload OSA report
+        uses: actions/upload-artifact@v4
+        with:
+          name: osa-dependency-check-report
+          path: reports
+
+  # 4. Анализ образов и конфигурации контейнеров (Trivy)
+  container-analysis:
+    runs-on: ubuntu-latest
+    needs: setup-and-compose
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Trivy
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          version: latest
+
+      # Анализ образов
+      - name: Scan backend image
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ghcr.io/netology-code/necommerce-backend
+          format: 'table'
+          output: 'trivy-backend.txt'
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+
+      - name: Scan frontend image
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ghcr.io/netology-code/necommerce-frontend
+          format: 'table'
+          output: 'trivy-frontend.txt'
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+
+      # Анализ конфигурации (docker-compose, Dockerfile, k8s yaml и др.)
+      - name: Trivy config scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'table'
+          output: 'trivy-config.txt'
+
+      - name: Upload Trivy reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-reports
+          path: |
+            trivy-backend.txt
+            trivy-frontend.txt
+            trivy-config.txt
+
+  # 5. Поиск секретов
+  secrets-scan:
+    runs-on: ubuntu-latest
+    needs: setup-and-compose
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Вариант 1: Gitleaks
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          args: detect -v --redact --report-format json --report-path gitleaks-report.json
+
+      - name: Upload Gitleaks report
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: gitleaks-report.json
+
+  # 6. Динамический анализ (OWASP ZAP)
+  dast-zap:
+    runs-on: ubuntu-latest
+    needs: setup-and-compose
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Start services via docker-compose
+        run: |
+          docker-compose up -d
+          docker ps
+
+      - name: Wait for frontend
+        run: |
+          for i in {1..30}; do
+            if curl -sSf http://localhost:8888 > /dev/null; then
+              echo "Frontend is up"
+              break
+            fi
+            echo "Waiting for frontend..."
+            sleep 5
+          done
+
+      # Запуск ZAP в режиме baseline/quick scan
+      - name: Run OWASP ZAP Baseline Scan
+        run: |
+          docker run --network host -v $PWD:/zap/wrk/:rw -t owasp/zap2docker-stable zap-baseline.py \
+            -t http://localhost:8888 \
+            -r zap-report.html \
+            -x zap-report.xml \
+            -I
 
       - name: Upload ZAP reports
         uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: dast-reports
+          name: zap-reports
           path: |
             zap-report.html
-            zap-report.json
-          retention-days: 30
-
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up Docker resources..."
-          docker-compose down -v || true
-          docker system prune -af || true
-          docker volume prune -f || true
-
-  security-report:
-    runs-on: ubuntu-latest
-    name: Generate Security Report
-    needs: [sast, dependency-scanning, container-scanning, secret-scanning, deploy-and-dast]
-    if: always()
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Generate summary report
-        run: |
-          cat > SECURITY_SUMMARY.md << 'EOF'
-          # Security Analysis Summary
-          
-          ## Overview
-          Security analysis completed for commit: ${{ github.sha }}
-          
-          ## Results Summary
-          
-          EOF
-          
-          # Добавляем статусы
-          echo "| Tool | Status |" >> SECURITY_SUMMARY.md
-          echo "|------|--------|" >> SECURITY_SUMMARY.md
-          echo "| SAST (Semgrep) | ${{ needs.sast.result }} |" >> SECURITY_SUMMARY.md
-          echo "| Dependency Scanning (Trivy) | ${{ needs.dependency-scanning.result }} |" >> SECURITY_SUMMARY.md
-          echo "| Container Scanning (Trivy) | ${{ needs.container-scanning.result }} |" >> SECURITY_SUMMARY.md
-          echo "| Secret Scanning (Gitleaks) | ${{ needs.secret-scanning.result }} |" >> SECURITY_SUMMARY.md
-          echo "| DAST (OWASP ZAP) | ${{ needs.deploy-and-dast.result }} |" >> SECURITY_SUMMARY.md
-          
-          cat >> SECURITY_SUMMARY.md << 'EOF'
-          
-          ## Artifacts
-          All detailed reports are available as workflow artifacts.
-          
-          ## Recommendations
-          1. Review all security findings in the attached reports
-          2. Prioritize critical and high severity vulnerabilities
-          3. Update dependencies regularly
-          4. Implement security fixes in upcoming sprints
-          
-          EOF
-
-      - name: Upload final report
-        uses: actions/upload-artifact@v4
-        with:
-          name: final-security-report
-          path: |
-            SECURITY_SUMMARY.md
-            artifacts/
-          retention-days: 90
-
-      - name: Create PR Comment
-        if: github.event_name == 'pull_request' && always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            let summary = `## 🔒 Security Scan Results for PR #${context.issue.number}
-
-            ### Scan Status:
-            ✅ **SAST Analysis:** ${context.job === 'security-report' ? context.job.result : 'pending'}
-            ✅ **Dependency Scanning:** ${context.job === 'security-report' ? context.job.result : 'pending'}
-            ✅ **Container Scanning:** ${context.job === 'security-report' ? context.job.result : 'pending'}
-            ✅ **Secret Detection:** ${context.job === 'security-report' ? context.job.result : 'pending'}
-            ✅ **DAST Analysis:** ${context.job === 'security-report' ? context.job.result : 'pending'}
-
-            📊 **Detailed reports are available in the workflow artifacts.**
-
-            **Next Steps:**
-            1. Review security findings
-            2. Address critical vulnerabilities before merging
-            3. Check artifact files for detailed information
-            `;
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: summary
-            });
+            zap-report.xml
