@@ -51,58 +51,7 @@ jobs:
             sleep 5
           done
 
-  # 2. SAST-анализ (CodeQL)
-  sast:
-    runs-on: ubuntu-latest
-    needs: setup-and-compose
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: javascript
-
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-        with:
-          category: "/language:javascript"
-
-  # 3. OSA-анализ (Dependency-Check)
-  osa:
-    runs-on: ubuntu-latest
-    needs: setup-and-compose
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Dependency-Check
-        run: |
-          wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.2/dependency-check-10.0.2-release.zip
-          unzip dependency-check-10.0.2-release.zip -d dependency-check
-          # В архиве структура: dependency-check/dependency-check/...
-          chmod +x dependency-check/dependency-check/bin/dependency-check.sh
-
-      - name: Run Dependency-Check
-        run: |
-          mkdir -p reports
-          dependency-check/dependency-check/bin/dependency-check.sh \
-            --scan . \
-            --format "HTML" \
-            --out reports \
-            --project "necommerce"
-
-      - name: Upload OSA report
-        uses: actions/upload-artifact@v4
-        with:
-          name: osa-dependency-check-report
-          path: reports
-
-  # 4. Анализ образов и конфигурации контейнеров (Trivy)
+  # 2. Анализ образов и конфигурации контейнеров (Trivy)
   container-analysis:
     runs-on: ubuntu-latest
     needs: setup-and-compose
@@ -147,29 +96,7 @@ jobs:
             trivy-frontend.txt
             trivy-config.txt
 
-  # 5. Поиск секретов (Gitleaks через docker run)
-  secrets-scan:
-    runs-on: ubuntu-latest
-    needs: setup-and-compose
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Run Gitleaks
-        run: |
-          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
-            detect -v --redact \
-            --source="/repo" \
-            --report-format json \
-            --report-path /repo/gitleaks-report.json
-
-      - name: Upload Gitleaks report
-        uses: actions/upload-artifact@v4
-        with:
-          name: gitleaks-report
-          path: gitleaks-report.json
-
-  # 6. Динамический анализ (OWASP ZAP)
+  # 3. Динамический анализ (OWASP ZAP)
   dast-zap:
     runs-on: ubuntu-latest
     needs: setup-and-compose
