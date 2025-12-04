@@ -1,3 +1,18 @@
+version: '3.7'
+services:
+  backend:
+    image: ghcr.io/netology-code/necommerce-backend
+    ports:
+      - 9999:9999
+  frontend:
+    image: ghcr.io/netology-code/necommerce-frontend
+    environment:
+      - API=http://backend:9999
+      - MEDIA=http://backend:9999
+    ports:
+      - 8888:80
+    depends_on:
+      - backend
 name: Security CI Pipeline
 
 on:
@@ -29,23 +44,28 @@ jobs:
 
       - name: Wait for services to be ready
         run: |
-          # Ожидание frontend
+          echo "=== Waiting for frontend on http://localhost:8888 ==="
+          # ждём, пока фронт начнёт отдавать 200
           for i in {1..30}; do
-            if curl -sSf http://localhost:8888 > /dev/null; then
+            status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8888 || echo "000")
+            echo "Attempt $i: frontend HTTP status: $status"
+            if [ "$status" = "200" ]; then
               echo "Frontend is up"
               break
             fi
-            echo "Waiting for frontend... $i"
             sleep 5
           done
 
-          # Ожидание backend
+          echo "=== Waiting for backend on http://localhost:9999 ==="
+          # для backend достаточно, чтобы порт отвечал (любой код, кроме 000);
+          # 404 нас устраивает
           for i in {1..30}; do
-            if curl -sSf http://localhost:9999 > /dev/null; then
-              echo "Backend is up"
+            status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9999 || echo "000")
+            echo "Attempt $i: backend HTTP status: $status"
+            if [ "$status" != "000" ]; then
+              echo "Backend is up (HTTP $status)"
               break
             fi
-            echo "Waiting for backend... $i"
             sleep 5
           done
 
@@ -187,12 +207,14 @@ jobs:
 
       - name: Wait for frontend
         run: |
+          echo "=== Waiting for frontend on http://localhost:8888 ==="
           for i in {1..30}; do
-            if curl -sSf http://localhost:8888 > /dev/null; then
+            status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8888 || echo "000")
+            echo "Attempt $i: frontend HTTP status: $status"
+            if [ "$status" = "200" ]; then
               echo "Frontend is up"
               break
             fi
-            echo "Waiting for frontend..."
             sleep 5
           done
 
