@@ -1,0 +1,103 @@
+name: Security Source Scan (Frontend & Backend)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout current repository (infra/compose)
+        uses: actions/checkout@v4
+
+      - name: Clone frontend repo
+        run: |
+          git clone https://github.com/netology-code/necommerce-frontend.git frontend
+
+      - name: Clone backend repo
+        run: |
+          git clone https://github.com/netology-code/necommerce-backend.git backend
+
+      # ---------- SAST (CodeQL) ----------
+      # Для простоты: один CodeQL-анализ по объединённому JS-коду front+back
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+
+      - name: Prepare combined workspace for CodeQL
+        run: |
+          mkdir -p workspace
+          cp -R frontend workspace/frontend
+          cp -R backend workspace/backend
+
+      - name: Autobuild (CodeQL)
+        uses: github/codeql-action/autobuild@v3
+        with:
+          working-directory: workspace
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript"
+
+      # ---------- OSA (Dependency-Check) ----------
+      - name: Install Dependency-Check
+        run: |
+          wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.2/dependency-check-10.0.2-release.zip
+          unzip dependency-check-10.0.2-release.zip -d dependency-check
+          chmod +x dependency-check/dependency-check/bin/dependency-check.sh
+
+      - name: Run Dependency-Check for frontend
+        run: |
+          mkdir -p reports/frontend
+          dependency-check/dependency-check/bin/dependency-check.sh \
+            --scan frontend \
+            --format "HTML" \
+            --out reports/frontend \
+            --project "necommerce-frontend"
+
+      - name: Run Dependency-Check for backend
+        run: |
+          mkdir -p reports/backend
+          dependency-check/dependency-check/bin/dependency-check.sh \
+            --scan backend \
+            --format "HTML" \
+            --out reports/backend \
+            --project "necommerce-backend"
+
+      - name: Upload OSA reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: osa-dependency-check-reports
+          path: reports
+
+      # ---------- Secrets scan (Gitleaks) ----------
+      - name: Run Gitleaks for frontend
+        run: |
+          docker run --rm -v "$PWD/frontend:/repo" zricethezav/gitleaks:latest \
+            detect -v --redact \
+            --source="/repo" \
+            --report-format json \
+            --report-path /repo/gitleaks-frontend.json
+
+      - name: Run Gitleaks for backend
+        run: |
+          docker run --rm -v "$PWD/backend:/repo" zricethezav/gitleaks:latest \
+            detect -v --redact \
+            --source="/repo" \
+            --report-format json \
+            --report-path /repo/gitleaks-backend.json
+
+      - name: Upload Gitleaks reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-reports
+          path: |
+            frontend/gitleaks-frontend.json
+            backend/gitleaks-backend.json
