@@ -30,7 +30,6 @@ jobs:
       - name: Wait for services to be ready
         run: |
           echo "=== Waiting for frontend on http://localhost:8888 ==="
-          # ждём, пока фронт начнёт отдавать 200
           for i in {1..30}; do
             status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8888 || echo "000")
             echo "Attempt $i: frontend HTTP status: $status"
@@ -42,8 +41,6 @@ jobs:
           done
 
           echo "=== Waiting for backend on http://localhost:9999 ==="
-          # для backend достаточно, чтобы порт отвечал (любой код, кроме 000);
-          # 404 нас устраивает
           for i in {1..30}; do
             status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9999 || echo "000")
             echo "Attempt $i: backend HTTP status: $status"
@@ -54,7 +51,7 @@ jobs:
             sleep 5
           done
 
-  # 2. SAST-анализ
+  # 2. SAST-анализ (CodeQL)
   sast:
     runs-on: ubuntu-latest
     needs: setup-and-compose
@@ -75,13 +72,7 @@ jobs:
         with:
           category: "/language:javascript"
 
-      - name: Upload CodeQL SARIF
-        uses: actions/upload-artifact@v4
-        with:
-          name: sast-codeql-results
-          path: ./results # скорректируйте под фактический путь
-
-  # 3. OSA-анализ
+  # 3. OSA-анализ (Dependency-Check)
   osa:
     runs-on: ubuntu-latest
     needs: setup-and-compose
@@ -93,12 +84,12 @@ jobs:
         run: |
           wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.2/dependency-check-10.0.2-release.zip
           unzip dependency-check-10.0.2-release.zip -d dependency-check
-          chmod +x dependency-check/bin/dependency-check.sh
+          chmod +x dependency-check/dependency-check.sh
 
       - name: Run Dependency-Check
         run: |
           mkdir -p reports
-          dependency-check/bin/dependency-check.sh \
+          dependency-check/dependency-check.sh \
             --scan . \
             --format "HTML" \
             --out reports \
@@ -118,14 +109,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Trivy
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          version: latest
+      # Отдельной "Install Trivy" не нужно — action сам тянет trivy
 
       - name: Scan backend image
         uses: aquasecurity/trivy-action@0.24.0
         with:
+          scan-type: image
           image-ref: ghcr.io/netology-code/necommerce-backend
           format: 'table'
           output: 'trivy-backend.txt'
@@ -135,6 +124,7 @@ jobs:
       - name: Scan frontend image
         uses: aquasecurity/trivy-action@0.24.0
         with:
+          scan-type: image
           image-ref: ghcr.io/netology-code/necommerce-frontend
           format: 'table'
           output: 'trivy-frontend.txt'
@@ -158,7 +148,7 @@ jobs:
             trivy-frontend.txt
             trivy-config.txt
 
-  # 5. Поиск секретов
+  # 5. Поиск секретов (Gitleaks через docker run)
   secrets-scan:
     runs-on: ubuntu-latest
     needs: setup-and-compose
@@ -167,9 +157,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        with:
-          args: detect -v --redact --report-format json --report-path gitleaks-report.json
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+            detect -v --redact \
+            --source="/repo" \
+            --report-format json \
+            --report-path /repo/gitleaks-report.json
 
       - name: Upload Gitleaks report
         uses: actions/upload-artifact@v4
@@ -205,7 +198,8 @@ jobs:
 
       - name: Run OWASP ZAP Baseline Scan
         run: |
-          docker run --network host -v "$PWD:/zap/wrk/:rw" -t owasp/zap2docker-stable zap-baseline.py \
+          docker run --network host -v "$PWD:/zap/wrk/:rw" -t docker.io/owasp/zap2docker-stable \
+            zap-baseline.py \
             -t http://localhost:8888 \
             -r zap-report.html \
             -x zap-report.xml \
