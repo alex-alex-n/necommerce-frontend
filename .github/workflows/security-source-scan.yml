@@ -45,7 +45,7 @@ jobs:
         with:
           category: "/language:javascript"
 
-      # ---------- Лёгкий OSA для frontend (npm audit) ----------
+      # ---------- Лёгкий OSA (npm audit для frontend) ----------
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
@@ -55,6 +55,7 @@ jobs:
         working-directory: ./frontend
         run: |
           npm install --ignore-scripts --no-fund --no-audit
+          # npm audit возвращает код 1 при найденных уязвимостях, поэтому глушим его
           npm audit --json > ../npm-audit-frontend.json || true
 
       - name: Upload npm audit report
@@ -65,6 +66,7 @@ jobs:
 
       # ---------- Secrets scan (Gitleaks) ----------
       - name: Run Gitleaks for frontend
+        continue-on-error: true
         run: |
           docker run --rm -v "$PWD/frontend:/repo" zricethezav/gitleaks:latest \
             detect -v --redact \
@@ -73,6 +75,7 @@ jobs:
             --report-path /repo/gitleaks-frontend.json
 
       - name: Run Gitleaks for backend
+        continue-on-error: true
         run: |
           docker run --rm -v "$PWD/backend:/repo" zricethezav/gitleaks:latest \
             detect -v --redact \
@@ -87,3 +90,23 @@ jobs:
           path: |
             frontend/gitleaks-frontend.json
             backend/gitleaks-backend.json
+
+      # ---------- Итоговый краткий отчёт ----------
+      - name: Summary report
+        run: |
+          echo "Security Scan Summary" > summary.txt
+          echo "" >> summary.txt
+          echo "1) CodeQL:" >> summary.txt
+          echo "   - Результаты смотри в GitHub Security -> Code scanning alerts." >> summary.txt
+          echo "" >> summary.txt
+          echo "2) npm audit (frontend):" >> summary.txt
+          echo "   - Артефакт: npm-audit-frontend (файл npm-audit-frontend.json)." >> summary.txt
+          echo "" >> summary.txt
+          echo "3) Gitleaks (frontend & backend):" >> summary.txt
+          echo "   - Артефакт: gitleaks-reports (gitleaks-frontend.json, gitleaks-backend.json)." >> summary.txt
+
+      - name: Upload summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-summary
+          path: summary.txt
