@@ -45,8 +45,7 @@ jobs:
         with:
           category: "/language:javascript"
 
-      # ---------- OSA (Dependency-Check) ----------
-      # Используем официальный Docker-образ и отключаем обновление NVD
+      # ---------- OSA (Dependency-Check через Docker) ----------
       - name: Run Dependency-Check for frontend
         run: |
           mkdir -p reports/frontend
@@ -58,9 +57,7 @@ jobs:
             --format HTML \
             --out /report \
             --project "necommerce-frontend" \
-            --nvdApiKey "" \
-            --nvdMaxRetryCount 0 \
-            --nvdApiDelay 0
+            -n   # не обновлять базы NVD/RetireJS
 
       - name: Run Dependency-Check for backend
         run: |
@@ -73,9 +70,7 @@ jobs:
             --format HTML \
             --out /report \
             --project "necommerce-backend" \
-            --nvdApiKey "" \
-            --nvdMaxRetryCount 0 \
-            --nvdApiDelay 0
+            -n   # не обновлять базы NVD/RetireJS
 
       - name: Upload OSA reports
         uses: actions/upload-artifact@v4
